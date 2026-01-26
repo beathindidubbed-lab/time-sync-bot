@@ -4,8 +4,12 @@ import { StatsCard } from "@/components/dashboard/StatsCard";
 import { RecentFilesTable } from "@/components/dashboard/RecentFilesTable";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { BotStatus } from "@/components/dashboard/BotStatus";
+import { StorageCard } from "@/components/dashboard/StorageCard";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Index = () => {
+  const { isOwner } = useAuth();
+
   return (
     <DashboardLayout>
       <div className="space-y-8">
@@ -13,7 +17,7 @@ const Index = () => {
         <div className="animate-fade-in">
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground mt-1">
-            Monitor your File Share Bot performance and activity
+            Monitor your Beat Animes File Share Bot performance
           </p>
         </div>
 
@@ -27,14 +31,16 @@ const Index = () => {
             icon={Files}
             iconColor="text-blue-400"
           />
-          <StatsCard
-            title="Active Users"
-            value="1,429"
-            change="+8% from last month"
-            changeType="positive"
-            icon={Users}
-            iconColor="text-primary"
-          />
+          {isOwner && (
+            <StatsCard
+              title="Active Users"
+              value="1,429"
+              change="+8% from last month"
+              changeType="positive"
+              icon={Users}
+              iconColor="text-primary"
+            />
+          )}
           <StatsCard
             title="Downloads Today"
             value="3,215"
@@ -60,6 +66,7 @@ const Index = () => {
           </div>
           <div className="space-y-6">
             <BotStatus status="online" uptime="5d 12h 34m" version="4.0.0" />
+            <StorageCard />
             <ActivityFeed />
           </div>
         </div>

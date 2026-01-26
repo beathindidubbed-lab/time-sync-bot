@@ -9,22 +9,32 @@ import {
   ChevronLeft,
   Activity,
   BarChart3,
+  Server,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/AuthContext";
+import { Badge } from "@/components/ui/badge";
 
 const navItems = [
   { title: "Overview", url: "/", icon: LayoutDashboard },
   { title: "Files", url: "/files", icon: Files },
-  { title: "Users", url: "/users", icon: Users },
+  { title: "Users", url: "/users", icon: Users, ownerOnly: true },
   { title: "Analytics", url: "/analytics", icon: BarChart3 },
   { title: "Activity", url: "/activity", icon: Activity },
+  { title: "Server", url: "/server", icon: Server },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+  const { userRole, isOwner, signOut } = useAuth();
+
+  const filteredNavItems = navItems.filter(
+    (item) => !item.ownerOnly || isOwner
+  );
 
   return (
     <aside
@@ -40,8 +50,8 @@ export function Sidebar() {
             <Bot className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-foreground">FileShare Bot</h1>
-            <p className="text-xs text-muted-foreground">Admin Panel</p>
+            <h1 className="text-sm font-semibold text-foreground">Beat Animes</h1>
+            <p className="text-xs text-muted-foreground">File Share Bot</p>
           </div>
         </div>
         {collapsed && (
@@ -51,9 +61,26 @@ export function Sidebar() {
         )}
       </div>
 
+      {/* Role Badge */}
+      {!collapsed && userRole && (
+        <div className="px-4 py-2">
+          <Badge
+            variant="outline"
+            className={cn(
+              "w-full justify-center capitalize",
+              userRole === "owner"
+                ? "border-primary/30 text-primary bg-primary/10"
+                : "border-blue-400/30 text-blue-400 bg-blue-400/10"
+            )}
+          >
+            {userRole}
+          </Badge>
+        </div>
+      )}
+
       {/* Navigation */}
       <nav className="flex-1 space-y-1 p-3">
-        {navItems.map((item) => {
+        {filteredNavItems.map((item) => {
           const isActive = location.pathname === item.url;
           return (
             <NavLink
@@ -73,8 +100,42 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Collapse Toggle */}
-      <div className="p-3 border-t border-sidebar-border">
+      {/* Links */}
+      {!collapsed && (
+        <div className="px-4 py-2 space-y-1 text-xs text-muted-foreground">
+          <a
+            href="https://t.me/BeatAnimes"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block hover:text-primary transition-colors"
+          >
+            Channel: @BeatAnimes
+          </a>
+          <a
+            href="https://t.me/Beat_Anime_Discussion"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block hover:text-primary transition-colors"
+          >
+            Support: @Beat_Anime_Discussion
+          </a>
+        </div>
+      )}
+
+      {/* Collapse & Logout */}
+      <div className="p-3 border-t border-sidebar-border space-y-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={signOut}
+          className={cn(
+            "w-full justify-center text-muted-foreground hover:text-destructive",
+            !collapsed && "justify-start"
+          )}
+        >
+          <LogOut className="h-4 w-4" />
+          {!collapsed && <span className="ml-2">Sign Out</span>}
+        </Button>
         <Button
           variant="ghost"
           size="sm"

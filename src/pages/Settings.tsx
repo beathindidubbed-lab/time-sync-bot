@@ -15,7 +15,7 @@ const Settings = () => {
         <div className="animate-fade-in">
           <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
           <p className="text-muted-foreground mt-1">
-            Configure your File Share Bot preferences
+            Configure your Beat Animes Bot preferences
           </p>
         </div>
 
@@ -46,7 +46,25 @@ const Settings = () => {
               <Label htmlFor="bot-username">Bot Username</Label>
               <Input
                 id="bot-username"
-                value="@FileShareBot"
+                value="@BeatAnimesBot"
+                className="bg-secondary border-border"
+                readOnly
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="channel">Channel</Label>
+              <Input
+                id="channel"
+                value="@BeatAnimes"
+                className="bg-secondary border-border"
+                readOnly
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="support">Support</Label>
+              <Input
+                id="support"
+                value="@Beat_Anime_Discussion"
                 className="bg-secondary border-border"
                 readOnly
               />
