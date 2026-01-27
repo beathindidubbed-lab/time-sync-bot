@@ -11,6 +11,7 @@ import {
   BarChart3,
   Server,
   LogOut,
+  Key,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ const navItems = [
   { title: "Analytics", url: "/analytics", icon: BarChart3 },
   { title: "Activity", url: "/activity", icon: Activity },
   { title: "Server", url: "/server", icon: Server },
+  { title: "Env Vars", url: "/env", icon: Key, ownerOnly: true },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 

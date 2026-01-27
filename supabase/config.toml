@@ -1,1 +1,13 @@
 project_id = "wrfonxduvrsbifbbcnvq"
+
+[functions.bot-stats]
+verify_jwt = false
+
+[functions.bot-users]
+verify_jwt = false
+
+[functions.bot-files]
+verify_jwt = false
+
+[functions.bot-env]
+verify_jwt = false
