@@ -12,6 +12,7 @@ import Analytics from "./pages/Analytics";
 import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
 import Server from "./pages/Server";
+import EnvVars from "./pages/EnvVars";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 
@@ -79,6 +80,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Settings />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/env"
+              element={
+                <ProtectedRoute requireOwner>
+                  <EnvVars />
                 </ProtectedRoute>
               }
             />
