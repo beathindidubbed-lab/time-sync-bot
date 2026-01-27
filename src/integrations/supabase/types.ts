@@ -14,6 +14,36 @@ export type Database = {
   }
   public: {
     Tables: {
+      bot_env_vars: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          is_secret: boolean | null
+          key: string
+          updated_at: string
+          value: string | null
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_secret?: boolean | null
+          key: string
+          updated_at?: string
+          value?: string | null
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_secret?: boolean | null
+          key?: string
+          updated_at?: string
+          value?: string | null
+        }
+        Relationships: []
+      }
       bot_settings: {
         Row: {
           id: string
