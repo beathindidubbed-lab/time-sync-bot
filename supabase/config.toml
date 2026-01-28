@@ -11,3 +11,12 @@ verify_jwt = false
 
 [functions.bot-env]
 verify_jwt = false
+
+[functions.bot-settings]
+verify_jwt = false
+
+[functions.bot-admins]
+verify_jwt = false
+
+[functions.bot-spam]
+verify_jwt = false
