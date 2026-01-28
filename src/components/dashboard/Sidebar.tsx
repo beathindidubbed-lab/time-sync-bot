@@ -12,6 +12,9 @@ import {
   Server,
   LogOut,
   Key,
+  Sliders,
+  UserCog,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -22,6 +25,9 @@ const navItems = [
   { title: "Overview", url: "/", icon: LayoutDashboard },
   { title: "Files", url: "/files", icon: Files },
   { title: "Users", url: "/users", icon: Users, ownerOnly: true },
+  { title: "Bot Settings", url: "/bot-settings", icon: Sliders },
+  { title: "Bot Admins", url: "/bot-admins", icon: UserCog, ownerOnly: true },
+  { title: "Spam Monitor", url: "/spam-monitor", icon: Shield },
   { title: "Analytics", url: "/analytics", icon: BarChart3 },
   { title: "Activity", url: "/activity", icon: Activity },
   { title: "Server", url: "/server", icon: Server },

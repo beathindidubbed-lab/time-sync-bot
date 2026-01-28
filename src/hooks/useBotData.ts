@@ -21,8 +21,18 @@ interface BotUser {
   username?: string;
   phone?: string;
   banned: boolean;
+  banned_at?: string;
   is_premium: boolean;
   joined_date: string;
+  spam_flagged?: boolean;
+  spam_count?: number;
+}
+
+interface BotUserStats {
+  total: number;
+  banned: number;
+  premium: number;
+  active: number;
 }
 
 interface BotFile {
@@ -46,6 +56,59 @@ interface EnvVar {
   updated_at: string;
 }
 
+interface BotSettings {
+  auto_link: boolean;
+  fsub_mode: boolean;
+  preview: boolean;
+  delete_style: string;
+  auto_delete: boolean;
+  auto_delete_time: number;
+  spam_protection: boolean;
+  spam_limit: number;
+  spam_rate: number;
+  force_subscribe_enabled: boolean;
+}
+
+interface AdminPermissions {
+  can_broadcast: boolean;
+  can_ban: boolean;
+  can_genlink: boolean;
+  can_batch: boolean;
+  can_custom_batch: boolean;
+  can_auto_link: boolean;
+  can_delete_files: boolean;
+  can_view_stats: boolean;
+  can_manage_fsub: boolean;
+  can_set_delete_time: boolean;
+}
+
+interface BotAdmin {
+  _id: string;
+  user_id: number;
+  name: string;
+  permissions: AdminPermissions;
+  created_at: string;
+  updated_at?: string;
+}
+
+interface SpamData {
+  spamLogs: unknown[];
+  flaggedUsers: {
+    user_id: number;
+    name: string;
+    username?: string;
+    spam_count: number;
+    last_spam?: string;
+    banned: boolean;
+  }[];
+  highActivityUsers: {
+    user_id: number;
+    name: string;
+    message_count: number;
+    last_active?: string;
+  }[];
+}
+
 interface Pagination {
   page: number;
   limit: number;
@@ -64,6 +127,7 @@ const getAuthHeaders = async () => {
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
+// ============ BOT STATS ============
 export function useBotStats() {
   return useQuery<BotStats>({
     queryKey: ["bot-stats"],
@@ -76,16 +140,21 @@ export function useBotStats() {
       }
       return response.json();
     },
-    staleTime: 30000, // 30 seconds
+    staleTime: 30000,
   });
 }
 
-export function useBotUsers(page = 1, limit = 20, search = "") {
-  return useQuery<{ users: BotUser[]; pagination: Pagination }>({
-    queryKey: ["bot-users", page, limit, search],
+// ============ BOT USERS ============
+export function useBotUsers(page = 1, limit = 20, search = "", filter = "all") {
+  return useQuery<{ users: BotUser[]; stats: BotUserStats; pagination: Pagination }>({
+    queryKey: ["bot-users", page, limit, search, filter],
     queryFn: async () => {
       const headers = await getAuthHeaders();
-      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+      const params = new URLSearchParams({ 
+        page: String(page), 
+        limit: String(limit),
+        filter 
+      });
       if (search) params.set("search", search);
       
       const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-users?${params}`, { headers });
@@ -99,6 +168,31 @@ export function useBotUsers(page = 1, limit = 20, search = "") {
   });
 }
 
+export function useBanUser() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async ({ userId, action }: { userId: number | string; action: "ban" | "unban" }) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-users`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ user_id: userId, action }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Failed to ${action} user`);
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-users"] });
+      queryClient.invalidateQueries({ queryKey: ["bot-stats"] });
+    },
+  });
+}
+
+// ============ BOT FILES ============
 export function useBotFiles(page = 1, limit = 20, search = "", fileType = "") {
   return useQuery<{ files: BotFile[]; pagination: Pagination }>({
     queryKey: ["bot-files", page, limit, search, fileType],
@@ -119,6 +213,7 @@ export function useBotFiles(page = 1, limit = 20, search = "", fileType = "") {
   });
 }
 
+// ============ ENV VARS ============
 export function useEnvVars() {
   return useQuery<{ envVars: EnvVar[] }>({
     queryKey: ["env-vars"],
@@ -188,7 +283,176 @@ export function useDeleteEnvVar() {
   });
 }
 
-// Helper to format bytes
+// ============ BOT SETTINGS ============
+export function useBotSettings() {
+  return useQuery<{ settings: BotSettings; isOwner: boolean }>({
+    queryKey: ["bot-settings"],
+    queryFn: async () => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-settings`, { headers });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to fetch bot settings");
+      }
+      return response.json();
+    },
+    staleTime: 30000,
+  });
+}
+
+export function useUpdateBotSettings() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (settings: Partial<BotSettings>) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-settings`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(settings),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to update bot settings");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-settings"] });
+    },
+  });
+}
+
+// ============ BOT ADMINS ============
+export function useBotAdmins() {
+  return useQuery<{ admins: BotAdmin[]; defaultPermissions: AdminPermissions }>({
+    queryKey: ["bot-admins"],
+    queryFn: async () => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-admins`, { headers });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to fetch bot admins");
+      }
+      return response.json();
+    },
+    staleTime: 30000,
+  });
+}
+
+export function useAddBotAdmin() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (admin: { user_id: number; name?: string; permissions?: Partial<AdminPermissions> }) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-admins`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(admin),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to add bot admin");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-admins"] });
+    },
+  });
+}
+
+export function useUpdateBotAdmin() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async ({ userId, permissions, name }: { userId: number; permissions?: AdminPermissions; name?: string }) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-admins`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ user_id: userId, permissions, name }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to update bot admin");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-admins"] });
+    },
+  });
+}
+
+export function useRemoveBotAdmin() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (userId: number) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-admins`, {
+        method: "DELETE",
+        headers,
+        body: JSON.stringify({ user_id: userId }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to remove bot admin");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-admins"] });
+    },
+  });
+}
+
+// ============ SPAM MONITOR ============
+export function useSpamData(page = 1, limit = 20) {
+  return useQuery<SpamData & { pagination: Pagination }>({
+    queryKey: ["bot-spam", page, limit],
+    queryFn: async () => {
+      const headers = await getAuthHeaders();
+      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+      
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-spam?${params}`, { headers });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to fetch spam data");
+      }
+      return response.json();
+    },
+    staleTime: 15000, // Refresh more often for spam monitoring
+  });
+}
+
+export function useClearSpamFlag() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (userId: number) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-spam`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ user_id: userId, action: "clear_flag" }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to clear spam flag");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-spam"] });
+      queryClient.invalidateQueries({ queryKey: ["bot-users"] });
+    },
+  });
+}
+
+// ============ HELPERS ============
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
@@ -197,13 +461,26 @@ export function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
-// Helper to format date
 export function formatDate(dateStr: string): string {
   try {
     return new Date(dateStr).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric",
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+export function formatDateTime(dateStr: string): string {
+  try {
+    return new Date(dateStr).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   } catch {
     return dateStr;

@@ -6,9 +6,11 @@ import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { BotStatus } from "@/components/dashboard/BotStatus";
 import { StorageCard } from "@/components/dashboard/StorageCard";
 import { useAuth } from "@/contexts/AuthContext";
+import { useBotStats } from "@/hooks/useBotData";
 
 const Index = () => {
   const { isOwner } = useAuth();
+  const { data: stats } = useBotStats();
 
   return (
     <DashboardLayout>
@@ -25,37 +27,37 @@ const Index = () => {
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StatsCard
             title="Total Files"
-            value="2,847"
-            change="+12% from last month"
-            changeType="positive"
+            value={stats?.files.total?.toLocaleString() || "—"}
+            change="From MongoDB"
+            changeType="neutral"
             icon={Files}
             iconColor="text-blue-400"
           />
           {isOwner && (
             <StatsCard
-              title="Active Users"
-              value="1,429"
-              change="+8% from last month"
-              changeType="positive"
+              title="Total Users"
+              value={stats?.users.total?.toLocaleString() || "—"}
+              change={`${stats?.users.banned || 0} banned`}
+              changeType="neutral"
               icon={Users}
               iconColor="text-primary"
             />
           )}
           <StatsCard
-            title="Downloads Today"
-            value="3,215"
-            change="+23% from yesterday"
+            title="Premium Users"
+            value={stats?.users.premium?.toLocaleString() || "—"}
+            change="Active subscribers"
             changeType="positive"
             icon={Download}
-            iconColor="text-green-400"
+            iconColor="text-yellow-400"
           />
           <StatsCard
-            title="Storage Used"
-            value="124 GB"
-            change="62% of 200GB"
-            changeType="neutral"
+            title="New This Week"
+            value={stats?.users.recentWeek?.toLocaleString() || "—"}
+            change="New registrations"
+            changeType="positive"
             icon={HardDrive}
-            iconColor="text-purple-400"
+            iconColor="text-green-400"
           />
         </div>
 

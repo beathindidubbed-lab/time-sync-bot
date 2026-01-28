@@ -13,6 +13,9 @@ import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
 import Server from "./pages/Server";
 import EnvVars from "./pages/EnvVars";
+import BotSettings from "./pages/BotSettings";
+import BotAdmins from "./pages/BotAdmins";
+import SpamMonitor from "./pages/SpamMonitor";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 
@@ -48,6 +51,30 @@ const App = () => (
               element={
                 <ProtectedRoute requireOwner>
                   <Users />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/bot-settings"
+              element={
+                <ProtectedRoute>
+                  <BotSettings />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/bot-admins"
+              element={
+                <ProtectedRoute requireOwner>
+                  <BotAdmins />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/spam-monitor"
+              element={
+                <ProtectedRoute>
+                  <SpamMonitor />
                 </ProtectedRoute>
               }
             />

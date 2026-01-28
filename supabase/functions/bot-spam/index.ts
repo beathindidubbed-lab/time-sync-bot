@@ -39,14 +39,13 @@ serve(async (req: Request) => {
 
     const userId = claimsData.claims.sub;
 
-    // Check if user is owner or admin
+    // Check if user is authorized
     const { data: roleData } = await supabase
       .from("user_roles")
       .select("role")
       .eq("user_id", userId)
       .maybeSingle();
 
-    const isOwner = roleData?.role === "owner";
     const isAuthorized = roleData?.role === "owner" || roleData?.role === "admin";
 
     if (!isAuthorized) {
@@ -70,20 +69,83 @@ serve(async (req: Request) => {
     
     const db = client.database();
     const usersCollection = db.collection("users");
+    const spamLogsCollection = db.collection("spam_logs");
 
-    // Handle ban/unban actions
+    const url = new URL(req.url);
+    const page = parseInt(url.searchParams.get("page") || "1");
+    const limit = parseInt(url.searchParams.get("limit") || "20");
+
+    if (req.method === "GET") {
+      // Get users with high message counts (potential spammers)
+      // This looks for users who have sent many messages recently
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      
+      // Try to get spam logs if the collection exists
+      let spamLogs: unknown[] = [];
+      try {
+        spamLogs = await spamLogsCollection
+          .find({ timestamp: { $gte: oneHourAgo } })
+          .sort({ message_count: -1 })
+          .limit(50)
+          .toArray();
+      } catch {
+        // Collection might not exist yet
+      }
+
+      // Get users who might be flagged as spammers
+      const flaggedUsers = await usersCollection
+        .find({ spam_flagged: true })
+        .sort({ spam_count: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .toArray();
+
+      const totalFlagged = await usersCollection.countDocuments({ spam_flagged: true });
+
+      // Get recent activity stats
+      const recentUsers = await usersCollection
+        .find({ last_active: { $gte: oneHourAgo } })
+        .sort({ message_count: -1 })
+        .limit(10)
+        .toArray();
+
+      await client.close();
+
+      return new Response(JSON.stringify({
+        spamLogs,
+        flaggedUsers: flaggedUsers.map(u => ({
+          user_id: u.user_id,
+          name: u.name,
+          username: u.username,
+          spam_count: u.spam_count || 0,
+          last_spam: u.last_spam,
+          banned: u.banned,
+        })),
+        highActivityUsers: recentUsers.map(u => ({
+          user_id: u.user_id,
+          name: u.name,
+          message_count: u.message_count || 0,
+          last_active: u.last_active,
+        })),
+        pagination: {
+          page,
+          limit,
+          total: totalFlagged,
+          totalPages: Math.ceil(totalFlagged / limit),
+        },
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (req.method === "POST") {
+      // Clear spam flag for a user
       const { user_id, action } = await req.json();
       
-      if (action === "ban") {
+      if (action === "clear_flag") {
         await usersCollection.updateOne(
           { user_id: Number(user_id) },
-          { $set: { banned: true, banned_at: new Date() } }
-        );
-      } else if (action === "unban") {
-        await usersCollection.updateOne(
-          { user_id: Number(user_id) },
-          { $set: { banned: false }, $unset: { banned_at: "" } }
+          { $set: { spam_flagged: false, spam_count: 0 } }
         );
       }
 
@@ -94,83 +156,14 @@ serve(async (req: Request) => {
       });
     }
 
-    // GET request - fetch users
-    const url = new URL(req.url);
-    const page = parseInt(url.searchParams.get("page") || "1");
-    const limit = parseInt(url.searchParams.get("limit") || "20");
-    const search = url.searchParams.get("search") || "";
-    const filter = url.searchParams.get("filter") || "all"; // all, banned, active, premium
-    
-    // Build query
-    const query: Record<string, unknown> = {};
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { user_id: parseInt(search) || 0 },
-      ];
-    }
-
-    // Apply filters
-    if (filter === "banned") {
-      query.banned = true;
-    } else if (filter === "active") {
-      query.banned = { $ne: true };
-    } else if (filter === "premium") {
-      query.is_premium = true;
-    }
-
-    const total = await usersCollection.countDocuments(query);
-    const users = await usersCollection
-      .find(query)
-      .sort({ joined_date: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .toArray();
-
-    // Get stats
-    const totalUsers = await usersCollection.countDocuments({});
-    const bannedUsers = await usersCollection.countDocuments({ banned: true });
-    const premiumUsers = await usersCollection.countDocuments({ is_premium: true });
-
     await client.close();
 
-    // If not owner, mask sensitive data
-    const sanitizedUsers = users.map((user) => ({
-      _id: user._id,
-      user_id: isOwner ? user.user_id : `***${String(user.user_id).slice(-4)}`,
-      name: user.name,
-      banned: user.banned,
-      banned_at: user.banned_at,
-      is_premium: user.is_premium,
-      joined_date: user.joined_date,
-      spam_flagged: user.spam_flagged,
-      spam_count: user.spam_count,
-      // Hide these from non-owners
-      ...(isOwner && {
-        username: user.username,
-        phone: user.phone,
-      }),
-    }));
-
-    return new Response(JSON.stringify({
-      users: sanitizedUsers,
-      stats: {
-        total: totalUsers,
-        banned: bannedUsers,
-        premium: premiumUsers,
-        active: totalUsers - bannedUsers,
-      },
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
-    }), {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: unknown) {
-    console.error("Error fetching bot users:", error);
+    console.error("Error fetching spam data:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(JSON.stringify({ error: message }), {
       status: 500,
