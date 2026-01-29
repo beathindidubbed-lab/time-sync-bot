@@ -22,7 +22,7 @@ const Server = () => {
         <div className="grid gap-6 lg:grid-cols-2">
           <ServerStats showConfidential={isOwner} />
           <div className="space-y-6">
-            <BotStatus status="online" uptime="5d 12h 34m" version="4.0.0" />
+            <BotStatus />
             <StorageCard />
           </div>
         </div>
