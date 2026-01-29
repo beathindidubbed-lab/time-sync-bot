@@ -452,6 +452,216 @@ export function useClearSpamFlag() {
   });
 }
 
+// ============ BOT STATUS ============
+interface BotStatusData {
+  status: "online" | "offline" | "maintenance";
+  uptime: string;
+  version: string;
+  started_at?: string;
+  last_heartbeat?: string;
+  response_time_ms?: number;
+}
+
+export function useBotStatus() {
+  return useQuery<BotStatusData>({
+    queryKey: ["bot-status"],
+    queryFn: async () => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-status`, { headers });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to fetch bot status");
+      }
+      return response.json();
+    },
+    staleTime: 15000, // Refresh every 15 seconds
+    refetchInterval: 30000, // Auto-refetch every 30 seconds
+  });
+}
+
+// ============ FORCE SUBSCRIBE CHANNELS ============
+interface FsubChannel {
+  _id: string;
+  channel_id: number;
+  channel_name: string;
+  channel_username?: string;
+  added_at?: string;
+  added_by?: string;
+}
+
+export function useFsubChannels() {
+  return useQuery<{ channels: FsubChannel[]; fsub_enabled: boolean }>({
+    queryKey: ["fsub-channels"],
+    queryFn: async () => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-fsub`, { headers });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to fetch fsub channels");
+      }
+      return response.json();
+    },
+    staleTime: 30000,
+  });
+}
+
+export function useAddFsubChannel() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (channel: { channel_id: number | string; channel_name?: string; channel_username?: string }) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-fsub`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ action: "add", ...channel }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to add channel");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fsub-channels"] });
+    },
+  });
+}
+
+export function useRemoveFsubChannel() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (channelId: number) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-fsub`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ action: "remove", channel_id: channelId }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to remove channel");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fsub-channels"] });
+    },
+  });
+}
+
+export function useToggleFsubMode() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async () => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-fsub`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ action: "toggle" }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to toggle fsub mode");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fsub-channels"] });
+      queryClient.invalidateQueries({ queryKey: ["bot-settings"] });
+    },
+  });
+}
+
+// ============ BROADCAST ============
+interface Broadcast {
+  _id: string;
+  message: string;
+  type: string;
+  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+  total_users: number;
+  sent_count: number;
+  failed_count: number;
+  created_at: string;
+  completed_at?: string;
+  created_by: string;
+  options: {
+    pin: boolean;
+    delete_after: number | null;
+    forward: boolean;
+  };
+}
+
+export function useBroadcasts(page = 1, limit = 20) {
+  return useQuery<{ broadcasts: Broadcast[]; total_active_users: number; pagination: Pagination }>({
+    queryKey: ["broadcasts", page, limit],
+    queryFn: async () => {
+      const headers = await getAuthHeaders();
+      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+      
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-broadcast?${params}`, { headers });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to fetch broadcasts");
+      }
+      return response.json();
+    },
+    staleTime: 15000,
+    refetchInterval: 30000, // Auto-refresh for status updates
+  });
+}
+
+export function useCreateBroadcast() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (broadcast: { 
+      message: string; 
+      type?: string; 
+      options?: { pin?: boolean; delete_after?: number | null; forward?: boolean } 
+    }) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-broadcast`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(broadcast),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to create broadcast");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["broadcasts"] });
+    },
+  });
+}
+
+export function useCancelBroadcast() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (broadcastId: string) => {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/bot-broadcast?id=${broadcastId}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to cancel broadcast");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["broadcasts"] });
+    },
+  });
+}
+
 // ============ HELPERS ============
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";

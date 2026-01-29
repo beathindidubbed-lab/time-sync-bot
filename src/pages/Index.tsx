@@ -67,7 +67,7 @@ const Index = () => {
             <RecentFilesTable />
           </div>
           <div className="space-y-6">
-            <BotStatus status="online" uptime="5d 12h 34m" version="4.0.0" />
+            <BotStatus />
             <StorageCard />
             <ActivityFeed />
           </div>

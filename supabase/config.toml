@@ -20,3 +20,12 @@ verify_jwt = false
 
 [functions.bot-spam]
 verify_jwt = false
+
+[functions.bot-status]
+verify_jwt = false
+
+[functions.bot-fsub]
+verify_jwt = false
+
+[functions.bot-broadcast]
+verify_jwt = false

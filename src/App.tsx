@@ -16,6 +16,8 @@ import EnvVars from "./pages/EnvVars";
 import BotSettings from "./pages/BotSettings";
 import BotAdmins from "./pages/BotAdmins";
 import SpamMonitor from "./pages/SpamMonitor";
+import FsubChannels from "./pages/FsubChannels";
+import Broadcast from "./pages/Broadcast";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 
@@ -115,6 +117,22 @@ const App = () => (
               element={
                 <ProtectedRoute requireOwner>
                   <EnvVars />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/fsub"
+              element={
+                <ProtectedRoute>
+                  <FsubChannels />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/broadcast"
+              element={
+                <ProtectedRoute>
+                  <Broadcast />
                 </ProtectedRoute>
               }
             />
