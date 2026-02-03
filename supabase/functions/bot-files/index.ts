@@ -7,6 +7,26 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+function normalizeMongoUri(raw: string) {
+  let uri = raw.trim();
+  // Common pitfall when pasting secrets: accidental wrapping quotes
+  if (
+    (uri.startsWith('"') && uri.endsWith('"')) ||
+    (uri.startsWith("'") && uri.endsWith("'"))
+  ) {
+    uri = uri.slice(1, -1).trim();
+  }
+
+  // denodrivers/mongo recommends setting authMechanism explicitly for Atlas SRV URLs.
+  // If it's missing, default to SCRAM-SHA-1 (supported by the driver and Atlas).
+  if ((uri.startsWith("mongodb+srv://") || uri.startsWith("mongodb://")) && !/([?&])authMechanism=/.test(uri)) {
+    uri += uri.includes("?") ? "&" : "?";
+    uri += "authMechanism=SCRAM-SHA-1";
+  }
+
+  return uri;
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -44,7 +64,8 @@ serve(async (req: Request) => {
     const fileType = url.searchParams.get("type") || "";
 
     // Connect to MongoDB
-    const mongoUri = Deno.env.get("MONGODB_URI");
+    const rawMongoUri = Deno.env.get("MONGODB_URI");
+    const mongoUri = rawMongoUri ? normalizeMongoUri(rawMongoUri) : null;
     if (!mongoUri) {
       return new Response(JSON.stringify({ error: "MongoDB not configured" }), { 
         status: 500, 
@@ -103,7 +124,12 @@ serve(async (req: Request) => {
   } catch (error: unknown) {
     console.error("Error fetching bot files:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: message }), {
+    const hint =
+      typeof message === "string" &&
+      (message.includes("bad auth") || message.includes("authentication failed"))
+        ? "MongoDB authentication failed. Double-check username/password, remove any surrounding quotes in MONGODB_URI, URL-encode special characters in the password (e.g. @, :, /, #), and ensure the URI includes authMechanism=SCRAM-SHA-1 when using Atlas."
+        : undefined;
+    return new Response(JSON.stringify({ error: message, hint }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
