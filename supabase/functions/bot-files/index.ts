@@ -1,31 +1,11 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { MongoClient } from "https://deno.land/x/mongo@v0.32.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
+import { connectDb, getConnectionHint } from "../_shared/db.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-function normalizeMongoUri(raw: string) {
-  let uri = raw.trim();
-  // Common pitfall when pasting secrets: accidental wrapping quotes
-  if (
-    (uri.startsWith('"') && uri.endsWith('"')) ||
-    (uri.startsWith("'") && uri.endsWith("'"))
-  ) {
-    uri = uri.slice(1, -1).trim();
-  }
-
-  // denodrivers/mongo recommends setting authMechanism explicitly for Atlas SRV URLs.
-  // If it's missing, default to SCRAM-SHA-1 (supported by the driver and Atlas).
-  if ((uri.startsWith("mongodb+srv://") || uri.startsWith("mongodb://")) && !/([?&])authMechanism=/.test(uri)) {
-    uri += uri.includes("?") ? "&" : "?";
-    uri += "authMechanism=SCRAM-SHA-1";
-  }
-
-  return uri;
-}
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -63,72 +43,111 @@ serve(async (req: Request) => {
     const search = url.searchParams.get("search") || "";
     const fileType = url.searchParams.get("type") || "";
 
-    // Connect to MongoDB
-    const rawMongoUri = Deno.env.get("MONGODB_URI");
-    const mongoUri = rawMongoUri ? normalizeMongoUri(rawMongoUri) : null;
-    if (!mongoUri) {
-      return new Response(JSON.stringify({ error: "MongoDB not configured" }), { 
-        status: 500, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+    // Connect to database (auto-detects MongoDB or Postgres)
+    const db = await connectDb();
+
+    try {
+      let result;
+
+      if (db.type === "mongodb") {
+        const filesCollection = db.mongo!.db.collection("files");
+
+        // Build query
+        const query: Record<string, unknown> = {};
+        if (search) {
+          query.$or = [
+            { file_name: { $regex: search, $options: "i" } },
+            { caption: { $regex: search, $options: "i" } },
+          ];
+        }
+        if (fileType) {
+          query.file_type = fileType;
+        }
+
+        const total = await filesCollection.countDocuments(query);
+        const files = await filesCollection
+          .find(query)
+          .sort({ created_at: -1 })
+          .skip((page - 1) * limit)
+          .limit(limit)
+          .toArray();
+
+        result = {
+          files: files.map((file) => ({
+            _id: file._id,
+            file_id: file.file_id,
+            file_name: file.file_name,
+            file_type: file.file_type,
+            file_size: file.file_size,
+            caption: file.caption,
+            downloads: file.downloads || 0,
+            created_at: file.created_at,
+          })),
+          pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit),
+          },
+        };
+      } else {
+        // PostgreSQL
+        const sql = db.postgres!;
+        const offset = (page - 1) * limit;
+
+        let countQuery;
+        let filesQuery;
+
+        if (search && fileType) {
+          countQuery = sql`SELECT COUNT(*)::int as count FROM files WHERE (file_name ILIKE ${'%' + search + '%'} OR caption ILIKE ${'%' + search + '%'}) AND file_type = ${fileType}`;
+          filesQuery = sql`SELECT * FROM files WHERE (file_name ILIKE ${'%' + search + '%'} OR caption ILIKE ${'%' + search + '%'}) AND file_type = ${fileType} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+        } else if (search) {
+          countQuery = sql`SELECT COUNT(*)::int as count FROM files WHERE file_name ILIKE ${'%' + search + '%'} OR caption ILIKE ${'%' + search + '%'}`;
+          filesQuery = sql`SELECT * FROM files WHERE file_name ILIKE ${'%' + search + '%'} OR caption ILIKE ${'%' + search + '%'} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+        } else if (fileType) {
+          countQuery = sql`SELECT COUNT(*)::int as count FROM files WHERE file_type = ${fileType}`;
+          filesQuery = sql`SELECT * FROM files WHERE file_type = ${fileType} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+        } else {
+          countQuery = sql`SELECT COUNT(*)::int as count FROM files`;
+          filesQuery = sql`SELECT * FROM files ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+        }
+
+        const [countResult, files] = await Promise.all([countQuery, filesQuery]);
+        const total = countResult[0]?.count || 0;
+
+        result = {
+          files: files.map((file: Record<string, unknown>) => ({
+            _id: file.id,
+            file_id: file.file_id,
+            file_name: file.file_name,
+            file_type: file.file_type,
+            file_size: file.file_size,
+            caption: file.caption,
+            downloads: file.downloads || 0,
+            created_at: file.created_at,
+          })),
+          pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit),
+          },
+        };
+      }
+
+      await db.close();
+
+      return new Response(JSON.stringify(result), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    } catch (error) {
+      await db.close();
+      throw error;
     }
-
-    const client = new MongoClient();
-    await client.connect(mongoUri);
-    
-    const db = client.database();
-    const filesCollection = db.collection("files");
-    
-    // Build query
-    const query: Record<string, unknown> = {};
-    if (search) {
-      query.$or = [
-        { file_name: { $regex: search, $options: "i" } },
-        { caption: { $regex: search, $options: "i" } },
-      ];
-    }
-    if (fileType) {
-      query.file_type = fileType;
-    }
-
-    const total = await filesCollection.countDocuments(query);
-    const files = await filesCollection
-      .find(query)
-      .sort({ created_at: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .toArray();
-
-    await client.close();
-
-    return new Response(JSON.stringify({
-      files: files.map((file) => ({
-        _id: file._id,
-        file_id: file.file_id,
-        file_name: file.file_name,
-        file_type: file.file_type,
-        file_size: file.file_size,
-        caption: file.caption,
-        downloads: file.downloads || 0,
-        created_at: file.created_at,
-      })),
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
   } catch (error: unknown) {
     console.error("Error fetching bot files:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
-    const hint =
-      typeof message === "string" &&
-      (message.includes("bad auth") || message.includes("authentication failed"))
-        ? "MongoDB authentication failed. Double-check username/password, remove any surrounding quotes in MONGODB_URI, URL-encode special characters in the password (e.g. @, :, /, #), and ensure the URI includes authMechanism=SCRAM-SHA-1 when using Atlas."
-        : undefined;
+    const hint = error instanceof Error ? getConnectionHint(error) : undefined;
     return new Response(JSON.stringify({ error: message, hint }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

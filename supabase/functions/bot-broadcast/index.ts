@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { MongoClient } from "https://deno.land/x/mongo@v0.32.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
+import { connectDb, getConnectionHint } from "../_shared/db.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -39,14 +39,13 @@ serve(async (req: Request) => {
 
     const userId = claimsData.claims.sub;
 
-    // Check if user is authorized (owner or admin with can_broadcast permission)
+    // Check if user is authorized
     const { data: roleData } = await supabase
       .from("user_roles")
       .select("role")
       .eq("user_id", userId)
       .maybeSingle();
 
-    const isOwner = roleData?.role === "owner";
     const isAuthorized = roleData?.role === "owner" || roleData?.role === "admin";
 
     if (!isAuthorized) {
@@ -56,154 +55,226 @@ serve(async (req: Request) => {
       });
     }
 
-    // Connect to MongoDB
-    const mongoUri = Deno.env.get("MONGODB_URI");
-    if (!mongoUri) {
-      return new Response(JSON.stringify({ error: "MongoDB not configured" }), { 
-        status: 500, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
-      });
-    }
+    // Connect to database (auto-detects MongoDB or Postgres)
+    const db = await connectDb();
 
-    const client = new MongoClient();
-    await client.connect(mongoUri);
-    
-    const db = client.database();
-    const broadcastCollection = db.collection("broadcasts");
-    const usersCollection = db.collection("users");
+    try {
+      if (req.method === "GET") {
+        const url = new URL(req.url);
+        const page = parseInt(url.searchParams.get("page") || "1");
+        const limit = parseInt(url.searchParams.get("limit") || "20");
+        const offset = (page - 1) * limit;
 
-    if (req.method === "GET") {
-      // Get broadcast history
-      const url = new URL(req.url);
-      const page = parseInt(url.searchParams.get("page") || "1");
-      const limit = parseInt(url.searchParams.get("limit") || "20");
+        let result;
 
-      const total = await broadcastCollection.countDocuments({});
-      const broadcasts = await broadcastCollection
-        .find({})
-        .sort({ created_at: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .toArray();
+        if (db.type === "mongodb") {
+          const broadcastCollection = db.mongo!.db.collection("broadcasts");
+          const usersCollection = db.mongo!.db.collection("users");
 
-      // Get total active users count for reference
-      const totalUsers = await usersCollection.countDocuments({ banned: { $ne: true } });
+          const total = await broadcastCollection.countDocuments({});
+          const broadcasts = await broadcastCollection
+            .find({})
+            .sort({ created_at: -1 })
+            .skip(offset)
+            .limit(limit)
+            .toArray();
 
-      await client.close();
+          const totalUsers = await usersCollection.countDocuments({ banned: { $ne: true } });
 
-      return new Response(JSON.stringify({
-        broadcasts: broadcasts.map(b => ({
-          _id: b._id.toString(),
-          message: b.message,
-          type: b.type || "text", // text, photo, video, document
-          status: b.status, // pending, in_progress, completed, failed
-          total_users: b.total_users,
-          sent_count: b.sent_count || 0,
-          failed_count: b.failed_count || 0,
-          created_at: b.created_at,
-          completed_at: b.completed_at,
-          created_by: b.created_by,
-          options: b.options, // pin, delete_after, etc.
-        })),
-        total_active_users: totalUsers,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit),
-        },
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+          result = {
+            broadcasts: broadcasts.map((b) => ({
+              _id: b._id.toString(),
+              message: b.message,
+              type: b.type || "text",
+              status: b.status,
+              total_users: b.total_users,
+              sent_count: b.sent_count || 0,
+              failed_count: b.failed_count || 0,
+              created_at: b.created_at,
+              completed_at: b.completed_at,
+              created_by: b.created_by,
+              options: b.options,
+            })),
+            total_active_users: totalUsers,
+            pagination: {
+              page,
+              limit,
+              total,
+              totalPages: Math.ceil(total / limit),
+            },
+          };
+        } else {
+          const sql = db.postgres!;
 
-    if (req.method === "POST") {
-      const { message, type, options } = await req.json();
-      
-      if (!message || message.trim() === "") {
-        await client.close();
-        return new Response(JSON.stringify({ error: "Message is required" }), { 
-          status: 400, 
-          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          const [totalResult, broadcasts, totalUsersResult] = await Promise.all([
+            sql`SELECT COUNT(*)::int as count FROM broadcasts`,
+            sql`SELECT * FROM broadcasts ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+            sql`SELECT COUNT(*)::int as count FROM users WHERE banned IS NULL OR banned = false`,
+          ]);
+
+          result = {
+            broadcasts: broadcasts.map((b: Record<string, unknown>) => ({
+              _id: b.id,
+              message: b.message,
+              type: b.type || "text",
+              status: b.status,
+              total_users: b.total_users,
+              sent_count: b.sent_count || 0,
+              failed_count: b.failed_count || 0,
+              created_at: b.created_at,
+              completed_at: b.completed_at,
+              created_by: b.created_by,
+              options: b.options,
+            })),
+            total_active_users: totalUsersResult[0]?.count || 0,
+            pagination: {
+              page,
+              limit,
+              total: totalResult[0]?.count || 0,
+              totalPages: Math.ceil((totalResult[0]?.count || 0) / limit),
+            },
+          };
+        }
+
+        await db.close();
+
+        return new Response(JSON.stringify(result), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      // Get total active users
-      const totalUsers = await usersCollection.countDocuments({ banned: { $ne: true } });
+      if (req.method === "POST") {
+        const { message, type, options } = await req.json();
 
-      // Create broadcast record
-      // The actual sending will be handled by the Python bot polling this collection
-      const broadcastId = await broadcastCollection.insertOne({
-        message: message.trim(),
-        type: type || "text",
-        status: "pending",
-        total_users: totalUsers,
-        sent_count: 0,
-        failed_count: 0,
-        created_at: new Date(),
-        created_by: userId,
-        options: {
-          pin: options?.pin || false,
-          delete_after: options?.delete_after || null, // seconds
-          forward: options?.forward || false,
-        },
-      });
+        if (!message || message.trim() === "") {
+          await db.close();
+          return new Response(JSON.stringify({ error: "Message is required" }), { 
+            status: 400, 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          });
+        }
 
-      await client.close();
+        let totalUsers = 0;
+        let broadcastId: string;
 
-      return new Response(JSON.stringify({ 
-        success: true, 
-        broadcast_id: broadcastId.toString(),
-        total_users: totalUsers,
-        message: "Broadcast queued successfully. The bot will process it shortly." 
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+        if (db.type === "mongodb") {
+          const broadcastCollection = db.mongo!.db.collection("broadcasts");
+          const usersCollection = db.mongo!.db.collection("users");
 
-    if (req.method === "DELETE") {
-      const url = new URL(req.url);
-      const broadcastId = url.searchParams.get("id");
+          totalUsers = await usersCollection.countDocuments({ banned: { $ne: true } });
 
-      if (!broadcastId) {
-        await client.close();
-        return new Response(JSON.stringify({ error: "Broadcast ID is required" }), { 
-          status: 400, 
-          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          const insertResult = await broadcastCollection.insertOne({
+            message: message.trim(),
+            type: type || "text",
+            status: "pending",
+            total_users: totalUsers,
+            sent_count: 0,
+            failed_count: 0,
+            created_at: new Date(),
+            created_by: userId,
+            options: {
+              pin: options?.pin || false,
+              delete_after: options?.delete_after || null,
+              forward: options?.forward || false,
+            },
+          });
+
+          broadcastId = insertResult.toString();
+        } else {
+          const sql = db.postgres!;
+
+          const totalUsersResult = await sql`SELECT COUNT(*)::int as count FROM users WHERE banned IS NULL OR banned = false`;
+          totalUsers = totalUsersResult[0]?.count || 0;
+
+          const insertResult = await sql`
+            INSERT INTO broadcasts (message, type, status, total_users, sent_count, failed_count, created_at, created_by, options)
+            VALUES (${message.trim()}, ${type || "text"}, 'pending', ${totalUsers}, 0, 0, NOW(), ${userId}, ${JSON.stringify({
+              pin: options?.pin || false,
+              delete_after: options?.delete_after || null,
+              forward: options?.forward || false,
+            })}::jsonb)
+            RETURNING id
+          `;
+
+          broadcastId = insertResult[0]?.id;
+        }
+
+        await db.close();
+
+        return new Response(JSON.stringify({ 
+          success: true, 
+          broadcast_id: broadcastId,
+          total_users: totalUsers,
+          message: "Broadcast queued successfully. The bot will process it shortly." 
+        }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      // Only allow canceling pending broadcasts
-      const broadcast = await broadcastCollection.findOne({ _id: broadcastId });
-      if (broadcast?.status !== "pending") {
-        await client.close();
-        return new Response(JSON.stringify({ error: "Can only cancel pending broadcasts" }), { 
-          status: 400, 
-          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      if (req.method === "DELETE") {
+        const url = new URL(req.url);
+        const broadcastId = url.searchParams.get("id");
+
+        if (!broadcastId) {
+          await db.close();
+          return new Response(JSON.stringify({ error: "Broadcast ID is required" }), { 
+            status: 400, 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          });
+        }
+
+        if (db.type === "mongodb") {
+          const broadcastCollection = db.mongo!.db.collection("broadcasts");
+
+          const broadcast = await broadcastCollection.findOne({ _id: broadcastId });
+          if (broadcast?.status !== "pending") {
+            await db.close();
+            return new Response(JSON.stringify({ error: "Can only cancel pending broadcasts" }), { 
+              status: 400, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            });
+          }
+
+          await broadcastCollection.updateOne(
+            { _id: broadcastId },
+            { $set: { status: "cancelled", cancelled_at: new Date() } }
+          );
+        } else {
+          const sql = db.postgres!;
+
+          const broadcast = await sql`SELECT status FROM broadcasts WHERE id = ${broadcastId} LIMIT 1`;
+          if (broadcast[0]?.status !== "pending") {
+            await db.close();
+            return new Response(JSON.stringify({ error: "Can only cancel pending broadcasts" }), { 
+              status: 400, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            });
+          }
+
+          await sql`UPDATE broadcasts SET status = 'cancelled', cancelled_at = NOW() WHERE id = ${broadcastId}`;
+        }
+
+        await db.close();
+
+        return new Response(JSON.stringify({ success: true, message: "Broadcast cancelled" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      await broadcastCollection.updateOne(
-        { _id: broadcastId },
-        { $set: { status: "cancelled", cancelled_at: new Date() } }
-      );
-
-      await client.close();
-
-      return new Response(JSON.stringify({ success: true, message: "Broadcast cancelled" }), {
+      await db.close();
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    } catch (error) {
+      await db.close();
+      throw error;
     }
-
-    await client.close();
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
   } catch (error: unknown) {
     console.error("Error managing broadcast:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: message }), {
+    const hint = error instanceof Error ? getConnectionHint(error) : undefined;
+    return new Response(JSON.stringify({ error: message, hint }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

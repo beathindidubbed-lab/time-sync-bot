@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { MongoClient, ObjectId } from "https://deno.land/x/mongo@v0.32.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
+import { connectDb, getConnectionHint } from "../_shared/db.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -67,110 +67,151 @@ serve(async (req: Request) => {
       });
     }
 
-    // Connect to MongoDB
-    const mongoUri = Deno.env.get("MONGODB_URI");
-    if (!mongoUri) {
-      return new Response(JSON.stringify({ error: "MongoDB not configured" }), { 
-        status: 500, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
-      });
-    }
+    // Connect to database (auto-detects MongoDB or Postgres)
+    const db = await connectDb();
 
-    const client = new MongoClient();
-    await client.connect(mongoUri);
-    
-    const db = client.database();
-    const adminsCollection = db.collection("admins");
+    try {
+      if (req.method === "GET") {
+        let admins: Record<string, unknown>[] = [];
 
-    if (req.method === "GET") {
-      // Get all admins
-      const admins = await adminsCollection.find().toArray();
-      
-      await client.close();
+        if (db.type === "mongodb") {
+          const adminsCollection = db.mongo!.db.collection("admins");
+          admins = await adminsCollection.find().toArray();
+        } else {
+          const sql = db.postgres!;
+          admins = await sql`SELECT * FROM admins ORDER BY created_at DESC`.catch(() => []);
+        }
 
-      // Add default permissions to any admin missing them
-      const adminsWithPermissions = admins.map(admin => ({
-        ...admin,
-        permissions: { ...DEFAULT_PERMISSIONS, ...admin.permissions },
-      }));
+        await db.close();
 
-      return new Response(JSON.stringify({
-        admins: adminsWithPermissions,
-        defaultPermissions: DEFAULT_PERMISSIONS,
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+        // Add default permissions to any admin missing them
+        const adminsWithPermissions = admins.map((admin) => ({
+          ...admin,
+          permissions: { ...DEFAULT_PERMISSIONS, ...((admin.permissions as Record<string, unknown>) || {}) },
+        }));
 
-    if (req.method === "POST") {
-      const { user_id, name, permissions } = await req.json();
-      
-      // Check if admin already exists
-      const existing = await adminsCollection.findOne({ user_id: Number(user_id) });
-      if (existing) {
-        await client.close();
-        return new Response(JSON.stringify({ error: "Admin already exists" }), { 
-          status: 400, 
-          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        return new Response(JSON.stringify({
+          admins: adminsWithPermissions,
+          defaultPermissions: DEFAULT_PERMISSIONS,
+        }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      // Insert new admin
-      await adminsCollection.insertOne({
-        user_id: Number(user_id),
-        name: name || `Admin ${user_id}`,
-        permissions: { ...DEFAULT_PERMISSIONS, ...permissions },
-        created_at: new Date(),
-      });
+      if (req.method === "POST") {
+        const { user_id: targetUserId, name, permissions } = await req.json();
 
-      await client.close();
+        if (db.type === "mongodb") {
+          const adminsCollection = db.mongo!.db.collection("admins");
 
-      return new Response(JSON.stringify({ success: true }), {
+          // Check if admin already exists
+          const existing = await adminsCollection.findOne({ user_id: Number(targetUserId) });
+          if (existing) {
+            await db.close();
+            return new Response(JSON.stringify({ error: "Admin already exists" }), { 
+              status: 400, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            });
+          }
+
+          await adminsCollection.insertOne({
+            user_id: Number(targetUserId),
+            name: name || `Admin ${targetUserId}`,
+            permissions: { ...DEFAULT_PERMISSIONS, ...permissions },
+            created_at: new Date(),
+          });
+        } else {
+          const sql = db.postgres!;
+
+          // Check if admin already exists
+          const existing = await sql`SELECT 1 FROM admins WHERE user_id = ${Number(targetUserId)} LIMIT 1`;
+          if (existing.length > 0) {
+            await db.close();
+            return new Response(JSON.stringify({ error: "Admin already exists" }), { 
+              status: 400, 
+              headers: { ...corsHeaders, "Content-Type": "application/json" } 
+            });
+          }
+
+          await sql`
+            INSERT INTO admins (user_id, name, permissions, created_at)
+            VALUES (${Number(targetUserId)}, ${name || `Admin ${targetUserId}`}, ${JSON.stringify({ ...DEFAULT_PERMISSIONS, ...permissions })}::jsonb, NOW())
+          `;
+        }
+
+        await db.close();
+
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (req.method === "PUT") {
+        const { user_id: targetUserId, permissions, name } = await req.json();
+
+        if (db.type === "mongodb") {
+          const adminsCollection = db.mongo!.db.collection("admins");
+
+          const updateData: Record<string, unknown> = { updated_at: new Date() };
+          if (permissions) updateData.permissions = permissions;
+          if (name) updateData.name = name;
+
+          await adminsCollection.updateOne(
+            { user_id: Number(targetUserId) },
+            { $set: updateData }
+          );
+        } else {
+          const sql = db.postgres!;
+
+          if (permissions && name) {
+            await sql`UPDATE admins SET permissions = ${JSON.stringify(permissions)}::jsonb, name = ${name}, updated_at = NOW() WHERE user_id = ${Number(targetUserId)}`;
+          } else if (permissions) {
+            await sql`UPDATE admins SET permissions = ${JSON.stringify(permissions)}::jsonb, updated_at = NOW() WHERE user_id = ${Number(targetUserId)}`;
+          } else if (name) {
+            await sql`UPDATE admins SET name = ${name}, updated_at = NOW() WHERE user_id = ${Number(targetUserId)}`;
+          }
+        }
+
+        await db.close();
+
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (req.method === "DELETE") {
+        const { user_id: targetUserId } = await req.json();
+
+        if (db.type === "mongodb") {
+          const adminsCollection = db.mongo!.db.collection("admins");
+          await adminsCollection.deleteOne({ user_id: Number(targetUserId) });
+        } else {
+          const sql = db.postgres!;
+          await sql`DELETE FROM admins WHERE user_id = ${Number(targetUserId)}`;
+        }
+
+        await db.close();
+
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      await db.close();
+
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    } catch (error) {
+      await db.close();
+      throw error;
     }
-
-    if (req.method === "PUT") {
-      const { user_id, permissions, name } = await req.json();
-      
-      const updateData: Record<string, unknown> = { updated_at: new Date() };
-      if (permissions) updateData.permissions = permissions;
-      if (name) updateData.name = name;
-
-      await adminsCollection.updateOne(
-        { user_id: Number(user_id) },
-        { $set: updateData }
-      );
-
-      await client.close();
-
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    if (req.method === "DELETE") {
-      const { user_id } = await req.json();
-      
-      await adminsCollection.deleteOne({ user_id: Number(user_id) });
-
-      await client.close();
-
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    await client.close();
-
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
   } catch (error: unknown) {
     console.error("Error managing bot admins:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: message }), {
+    const hint = error instanceof Error ? getConnectionHint(error) : undefined;
+    return new Response(JSON.stringify({ error: message, hint }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
