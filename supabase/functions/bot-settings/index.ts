@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { MongoClient } from "https://deno.land/x/mongo@v0.32.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
+import { connectDb, getConnectionHint } from "../_shared/db.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -12,12 +12,12 @@ const DEFAULT_SETTINGS = {
   auto_link: false,
   fsub_mode: true,
   preview: true,
-  delete_style: "text", // "text" or "photo"
+  delete_style: "text",
   auto_delete: true,
-  auto_delete_time: 600, // seconds
+  auto_delete_time: 600,
   spam_protection: true,
-  spam_limit: 10, // messages
-  spam_rate: 60, // seconds
+  spam_limit: 10,
+  spam_rate: 60,
   force_subscribe_enabled: true,
 };
 
@@ -70,62 +70,80 @@ serve(async (req: Request) => {
       });
     }
 
-    // Connect to MongoDB
-    const mongoUri = Deno.env.get("MONGODB_URI");
-    if (!mongoUri) {
-      return new Response(JSON.stringify({ error: "MongoDB not configured" }), { 
-        status: 500, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
-      });
-    }
+    // Connect to database (auto-detects MongoDB or Postgres)
+    const db = await connectDb();
 
-    const client = new MongoClient();
-    await client.connect(mongoUri);
-    
-    const db = client.database();
-    const settingsCollection = db.collection("settings");
+    try {
+      if (req.method === "GET") {
+        let settings: Record<string, unknown> | null = null;
 
-    if (req.method === "GET") {
-      // Get bot settings
-      const settings = await settingsCollection.findOne({ _id: "bot_settings" });
-      
-      await client.close();
+        if (db.type === "mongodb") {
+          const settingsCollection = db.mongo!.db.collection("settings");
+          const mongoSettings = await settingsCollection.findOne({ _id: "bot_settings" });
+          settings = mongoSettings ?? null;
+        } else {
+          const sql = db.postgres!;
+          const result = await sql`SELECT * FROM settings WHERE id = 'bot_settings' LIMIT 1`.catch(() => []);
+          settings = result[0] || null;
+        }
 
-      return new Response(JSON.stringify({
-        settings: settings ? { ...DEFAULT_SETTINGS, ...settings } : DEFAULT_SETTINGS,
-        isOwner,
-      }), {
+        await db.close();
+
+        return new Response(JSON.stringify({
+          settings: settings ? { ...DEFAULT_SETTINGS, ...settings } : DEFAULT_SETTINGS,
+          isOwner,
+        }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (req.method === "PUT") {
+        const updates = await req.json();
+
+        if (db.type === "mongodb") {
+          const settingsCollection = db.mongo!.db.collection("settings");
+          await settingsCollection.updateOne(
+            { _id: "bot_settings" },
+            { $set: { ...updates, updated_at: new Date() } },
+            { upsert: true }
+          );
+        } else {
+          const sql = db.postgres!;
+          // For Postgres, we'll update the settings as JSONB
+          await sql`
+            INSERT INTO settings (id, data, updated_at)
+            VALUES ('bot_settings', ${JSON.stringify(updates)}::jsonb, NOW())
+            ON CONFLICT (id) DO UPDATE SET 
+              data = settings.data || ${JSON.stringify(updates)}::jsonb,
+              updated_at = NOW()
+          `.catch(async () => {
+            // If table structure is different, try simpler update
+            await sql`UPDATE settings SET data = ${JSON.stringify(updates)}::jsonb, updated_at = NOW() WHERE id = 'bot_settings'`;
+          });
+        }
+
+        await db.close();
+
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      await db.close();
+
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    } catch (error) {
+      await db.close();
+      throw error;
     }
-
-    if (req.method === "PUT") {
-      const updates = await req.json();
-      
-      // Update or insert settings
-      await settingsCollection.updateOne(
-        { _id: "bot_settings" },
-        { $set: { ...updates, updated_at: new Date() } },
-        { upsert: true }
-      );
-
-      await client.close();
-
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    await client.close();
-
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
   } catch (error: unknown) {
     console.error("Error managing bot settings:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: message }), {
+    const hint = error instanceof Error ? getConnectionHint(error) : undefined;
+    return new Response(JSON.stringify({ error: message, hint }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

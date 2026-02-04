@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { MongoClient } from "https://deno.land/x/mongo@v0.32.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
+import { connectDb, getConnectionHint } from "../_shared/db.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -37,82 +37,100 @@ serve(async (req: Request) => {
       });
     }
 
-    // Connect to MongoDB
-    const mongoUri = Deno.env.get("MONGODB_URI");
-    if (!mongoUri) {
-      return new Response(JSON.stringify({ error: "MongoDB not configured" }), { 
-        status: 500, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
-      });
-    }
+    // Connect to database (auto-detects MongoDB or Postgres)
+    const db = await connectDb();
 
-    const client = new MongoClient();
-    await client.connect(mongoUri);
-    
-    const db = client.database();
-    
-    // Get bot status from settings or a dedicated status collection
-    const settingsCollection = db.collection("settings");
-    const statusCollection = db.collection("bot_status");
-    
-    // Try to get status from bot_status collection first, then settings
-    let botStatus = await statusCollection.findOne({ _id: "status" });
-    
-    if (!botStatus) {
-      // Fallback to settings collection
-      const settings = await settingsCollection.findOne({ _id: "bot_settings" });
-      botStatus = {
-        online: true, // Assume online if bot is responding
-        version: settings?.version || "4.0.0",
-        started_at: settings?.started_at || null,
-        last_heartbeat: settings?.last_heartbeat || null,
-      };
-    }
+    try {
+      let botStatus: Record<string, unknown> | null = null;
 
-    // Calculate uptime if started_at is available
-    let uptime = "Unknown";
-    if (botStatus.started_at) {
-      const startedAt = new Date(botStatus.started_at);
-      const now = new Date();
-      const diff = now.getTime() - startedAt.getTime();
-      
-      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      
-      uptime = `${days}d ${hours}h ${minutes}m`;
-    }
+      if (db.type === "mongodb") {
+        const settingsCollection = db.mongo!.db.collection("settings");
+        const statusCollection = db.mongo!.db.collection("bot_status");
 
-    // Check if bot is online based on last heartbeat (within last 2 minutes)
-    let status: "online" | "offline" | "maintenance" = "offline";
-    if (botStatus.last_heartbeat) {
-      const lastHeartbeat = new Date(botStatus.last_heartbeat);
-      const now = new Date();
-      const diffMinutes = (now.getTime() - lastHeartbeat.getTime()) / (1000 * 60);
-      
-      if (diffMinutes < 2) {
-        status = botStatus.maintenance ? "maintenance" : "online";
+        // Try to get status from bot_status collection first, then settings
+        const mongoStatus = await statusCollection.findOne({ _id: "status" });
+        botStatus = mongoStatus ?? null;
+
+        if (!botStatus) {
+          const settings = await settingsCollection.findOne({ _id: "bot_settings" });
+          botStatus = {
+            online: true,
+            version: settings?.version || "4.0.0",
+            started_at: settings?.started_at || null,
+            last_heartbeat: settings?.last_heartbeat || null,
+          };
+        }
+      } else {
+        // PostgreSQL
+        const sql = db.postgres!;
+
+        // Try bot_status table first
+        const statusResult = await sql`SELECT * FROM bot_status WHERE id = 'status' LIMIT 1`.catch(() => []);
+
+        if (statusResult.length > 0) {
+          botStatus = statusResult[0];
+        } else {
+          // Fallback to settings
+          const settingsResult = await sql`SELECT * FROM settings WHERE id = 'bot_settings' LIMIT 1`.catch(() => []);
+          const settings = settingsResult[0];
+          botStatus = {
+            online: true,
+            version: settings?.version || "4.0.0",
+            started_at: settings?.started_at || null,
+            last_heartbeat: settings?.last_heartbeat || null,
+          };
+        }
       }
-    } else if (botStatus.online) {
-      status = "online";
+
+      // Calculate uptime if started_at is available
+      let uptime = "Unknown";
+      if (botStatus?.started_at) {
+        const startedAt = new Date(botStatus.started_at as string);
+        const now = new Date();
+        const diff = now.getTime() - startedAt.getTime();
+
+        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+        uptime = `${days}d ${hours}h ${minutes}m`;
+      }
+
+      // Check if bot is online based on last heartbeat (within last 2 minutes)
+      let status: "online" | "offline" | "maintenance" = "offline";
+      if (botStatus?.last_heartbeat) {
+        const lastHeartbeat = new Date(botStatus.last_heartbeat as string);
+        const now = new Date();
+        const diffMinutes = (now.getTime() - lastHeartbeat.getTime()) / (1000 * 60);
+
+        if (diffMinutes < 2) {
+          status = botStatus.maintenance ? "maintenance" : "online";
+        }
+      } else if (botStatus?.online) {
+        status = "online";
+      }
+
+      await db.close();
+
+      return new Response(JSON.stringify({
+        status,
+        uptime,
+        version: botStatus?.version || "4.0.0",
+        started_at: botStatus?.started_at,
+        last_heartbeat: botStatus?.last_heartbeat,
+        response_time_ms: botStatus?.response_time_ms || null,
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      await db.close();
+      throw error;
     }
-
-    await client.close();
-
-    return new Response(JSON.stringify({
-      status,
-      uptime,
-      version: botStatus.version || "4.0.0",
-      started_at: botStatus.started_at,
-      last_heartbeat: botStatus.last_heartbeat,
-      response_time_ms: botStatus.response_time_ms || null,
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
   } catch (error: unknown) {
     console.error("Error fetching bot status:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: message }), {
+    const hint = error instanceof Error ? getConnectionHint(error) : undefined;
+    return new Response(JSON.stringify({ error: message, hint }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

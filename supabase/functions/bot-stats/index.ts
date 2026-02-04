@@ -1,31 +1,11 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { MongoClient } from "https://deno.land/x/mongo@v0.32.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.91.1";
+import { connectDb, getConnectionHint } from "../_shared/db.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-function normalizeMongoUri(raw: string) {
-  let uri = raw.trim();
-  // Common pitfall when pasting secrets: accidental wrapping quotes
-  if (
-    (uri.startsWith('"') && uri.endsWith('"')) ||
-    (uri.startsWith("'") && uri.endsWith("'"))
-  ) {
-    uri = uri.slice(1, -1).trim();
-  }
-
-  // denodrivers/mongo recommends setting authMechanism explicitly for Atlas SRV URLs.
-  // If it's missing, default to SCRAM-SHA-1 (supported by the driver and Atlas).
-  if ((uri.startsWith("mongodb+srv://") || uri.startsWith("mongodb://")) && !/([?&])authMechanism=/.test(uri)) {
-    uri += uri.includes("?") ? "&" : "?";
-    uri += "authMechanism=SCRAM-SHA-1";
-  }
-
-  return uri;
-}
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -57,70 +37,89 @@ serve(async (req: Request) => {
       });
     }
 
-    // Connect to MongoDB
-    const rawMongoUri = Deno.env.get("MONGODB_URI");
-    const mongoUri = rawMongoUri ? normalizeMongoUri(rawMongoUri) : null;
-    if (!mongoUri) {
-      return new Response(JSON.stringify({ error: "MongoDB not configured" }), { 
-        status: 500, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+    // Connect to database (auto-detects MongoDB or Postgres)
+    const db = await connectDb();
+
+    try {
+      let stats;
+
+      if (db.type === "mongodb") {
+        const usersCollection = db.mongo!.db.collection("users");
+        const filesCollection = db.mongo!.db.collection("files");
+
+        const [totalUsers, totalFiles, bannedUsers, premiumUsers] = await Promise.all([
+          usersCollection.countDocuments({}),
+          filesCollection.countDocuments({}),
+          usersCollection.countDocuments({ banned: true }),
+          usersCollection.countDocuments({ is_premium: true }),
+        ]);
+
+        // Get recent users (last 7 days)
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        const recentUsers = await usersCollection.countDocuments({
+          joined_date: { $gte: sevenDaysAgo }
+        });
+
+        // Get total file size
+        const filesWithSize = await filesCollection.aggregate([
+          { $group: { _id: null, totalSize: { $sum: "$file_size" } } }
+        ]).toArray();
+
+        const totalStorageUsed = filesWithSize[0]?.totalSize || 0;
+
+        stats = {
+          users: {
+            total: totalUsers,
+            banned: bannedUsers,
+            premium: premiumUsers,
+            recentWeek: recentUsers,
+          },
+          files: {
+            total: totalFiles,
+            totalStorageBytes: totalStorageUsed,
+          },
+        };
+      } else {
+        // PostgreSQL
+        const sql = db.postgres!;
+
+        const [usersResult, filesResult, bannedResult, premiumResult, recentResult, storageResult] = await Promise.all([
+          sql`SELECT COUNT(*)::int as count FROM users`,
+          sql`SELECT COUNT(*)::int as count FROM files`,
+          sql`SELECT COUNT(*)::int as count FROM users WHERE banned = true`,
+          sql`SELECT COUNT(*)::int as count FROM users WHERE is_premium = true`,
+          sql`SELECT COUNT(*)::int as count FROM users WHERE joined_date >= NOW() - INTERVAL '7 days'`,
+          sql`SELECT COALESCE(SUM(file_size), 0)::bigint as total FROM files`,
+        ]);
+
+        stats = {
+          users: {
+            total: usersResult[0]?.count || 0,
+            banned: bannedResult[0]?.count || 0,
+            premium: premiumResult[0]?.count || 0,
+            recentWeek: recentResult[0]?.count || 0,
+          },
+          files: {
+            total: filesResult[0]?.count || 0,
+            totalStorageBytes: Number(storageResult[0]?.total || 0),
+          },
+        };
+      }
+
+      await db.close();
+
+      return new Response(JSON.stringify(stats), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    } catch (error) {
+      await db.close();
+      throw error;
     }
-
-    const client = new MongoClient();
-    await client.connect(mongoUri);
-    
-    const db = client.database(); // Uses default database from URI
-    
-    // Get stats from various collections
-    const usersCollection = db.collection("users");
-    const filesCollection = db.collection("files");
-    
-    const [totalUsers, totalFiles, bannedUsers, premiumUsers] = await Promise.all([
-      usersCollection.countDocuments({}),
-      filesCollection.countDocuments({}),
-      usersCollection.countDocuments({ banned: true }),
-      usersCollection.countDocuments({ is_premium: true }),
-    ]);
-
-    // Get recent users (last 7 days)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const recentUsers = await usersCollection.countDocuments({
-      joined_date: { $gte: sevenDaysAgo }
-    });
-
-    // Get total file size (if stored)
-    const filesWithSize = await filesCollection.aggregate([
-      { $group: { _id: null, totalSize: { $sum: "$file_size" } } }
-    ]).toArray();
-    
-    const totalStorageUsed = filesWithSize[0]?.totalSize || 0;
-
-    await client.close();
-
-    return new Response(JSON.stringify({
-      users: {
-        total: totalUsers,
-        banned: bannedUsers,
-        premium: premiumUsers,
-        recentWeek: recentUsers,
-      },
-      files: {
-        total: totalFiles,
-        totalStorageBytes: totalStorageUsed,
-      },
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
   } catch (error: unknown) {
     console.error("Error fetching bot stats:", error);
     const message = error instanceof Error ? error.message : "Unknown error";
-    const hint =
-      typeof message === "string" &&
-      (message.includes("bad auth") || message.includes("authentication failed"))
-        ? "MongoDB authentication failed. Double-check username/password, remove any surrounding quotes in MONGODB_URI, URL-encode special characters in the password (e.g. @, :, /, #), and ensure the URI includes authMechanism=SCRAM-SHA-1 when using Atlas."
-        : undefined;
+    const hint = error instanceof Error ? getConnectionHint(error) : undefined;
     return new Response(JSON.stringify({ error: message, hint }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
