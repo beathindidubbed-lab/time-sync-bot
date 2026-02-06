@@ -6,7 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
-import Files from "./pages/Files";
+import Links from "./pages/Links";
 import Users from "./pages/Users";
 import Analytics from "./pages/Analytics";
 import Activity from "./pages/Activity";
@@ -41,10 +41,10 @@ const App = () => (
               }
             />
             <Route
-              path="/files"
+              path="/links"
               element={
                 <ProtectedRoute>
-                  <Files />
+                  <Links />
                 </ProtectedRoute>
               }
             />

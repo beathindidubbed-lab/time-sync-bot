@@ -1,16 +1,18 @@
-import { Files, Users, Download, HardDrive } from "lucide-react";
+import { Link2, Users, HardDrive, TrendingUp } from "lucide-react";
 import { DashboardLayout } from "@/components/dashboard/DashboardLayout";
 import { StatsCard } from "@/components/dashboard/StatsCard";
-import { RecentFilesTable } from "@/components/dashboard/RecentFilesTable";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { BotStatus } from "@/components/dashboard/BotStatus";
 import { StorageCard } from "@/components/dashboard/StorageCard";
 import { useAuth } from "@/contexts/AuthContext";
 import { useBotStats } from "@/hooks/useBotData";
+import { useLinkStats, useStorageStats } from "@/hooks/useLinks";
 
 const Index = () => {
   const { isOwner } = useAuth();
   const { data: stats } = useBotStats();
+  const { data: linkStats } = useLinkStats();
+  const { data: storageData } = useStorageStats();
 
   return (
     <DashboardLayout>
@@ -26,12 +28,12 @@ const Index = () => {
         {/* Stats Grid */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StatsCard
-            title="Total Files"
-            value={stats?.files.total?.toLocaleString() || "—"}
-            change="From MongoDB"
-            changeType="neutral"
-            icon={Files}
-            iconColor="text-blue-400"
+            title="Total Links"
+            value={linkStats?.total?.toLocaleString() || "0"}
+            change={`${linkStats?.active || 0} active`}
+            changeType="positive"
+            icon={Link2}
+            iconColor="text-primary"
           />
           {isOwner && (
             <StatsCard
@@ -40,7 +42,7 @@ const Index = () => {
               change={`${stats?.users.banned || 0} banned`}
               changeType="neutral"
               icon={Users}
-              iconColor="text-primary"
+              iconColor="text-blue-400"
             />
           )}
           <StatsCard
@@ -48,7 +50,7 @@ const Index = () => {
             value={stats?.users.premium?.toLocaleString() || "—"}
             change="Active subscribers"
             changeType="positive"
-            icon={Download}
+            icon={TrendingUp}
             iconColor="text-yellow-400"
           />
           <StatsCard
@@ -56,7 +58,7 @@ const Index = () => {
             value={stats?.users.recentWeek?.toLocaleString() || "—"}
             change="New registrations"
             changeType="positive"
-            icon={HardDrive}
+            icon={Users}
             iconColor="text-green-400"
           />
         </div>
@@ -64,12 +66,15 @@ const Index = () => {
         {/* Main Content Grid */}
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2">
-            <RecentFilesTable />
+            <ActivityFeed />
           </div>
           <div className="space-y-6">
             <BotStatus />
-            <StorageCard />
-            <ActivityFeed />
+            <StorageCard
+              usedBytes={storageData?.used_storage_bytes || undefined}
+              totalBytes={storageData?.total_storage_bytes || undefined}
+              fileCount={storageData?.file_count || undefined}
+            />
           </div>
         </div>
       </div>

@@ -45,11 +45,9 @@ serve(async (req: Request) => {
 
       if (db.type === "mongodb") {
         const usersCollection = db.mongo!.db.collection("users");
-        const filesCollection = db.mongo!.db.collection("files");
 
-        const [totalUsers, totalFiles, bannedUsers, premiumUsers] = await Promise.all([
+        const [totalUsers, bannedUsers, premiumUsers] = await Promise.all([
           usersCollection.countDocuments({}),
-          filesCollection.countDocuments({}),
           usersCollection.countDocuments({ banned: true }),
           usersCollection.countDocuments({ is_premium: true }),
         ]);
@@ -61,12 +59,34 @@ serve(async (req: Request) => {
           joined_date: { $gte: sevenDaysAgo }
         });
 
-        // Get total file size
-        const filesWithSize = await filesCollection.aggregate([
-          { $group: { _id: null, totalSize: { $sum: "$file_size" } } }
-        ]).toArray();
+        // Get storage info from collection stats
+        let storageUsedBytes = 0;
+        let totalCollections = 0;
+        try {
+          const collections = await db.mongo!.db.listCollections().toArray();
+          totalCollections = collections.length;
+          // Estimate storage from collection count (each ~37KB on free tier)
+          storageUsedBytes = totalCollections * 37748;
+        } catch (e) {
+          console.log("Could not list collections:", e);
+        }
 
-        const totalStorageUsed = filesWithSize[0]?.totalSize || 0;
+        // Update storage_stats in Supabase
+        try {
+          const serviceClient = createClient(
+            Deno.env.get("SUPABASE_URL")!,
+            Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+          );
+          await serviceClient.from("storage_stats").upsert({
+            id: "00000000-0000-0000-0000-000000000001",
+            used_storage_bytes: storageUsedBytes,
+            total_storage_bytes: 536870912, // 512MB free tier
+            file_count: totalCollections,
+            updated_at: new Date().toISOString(),
+          });
+        } catch (e) {
+          console.log("Could not update storage stats:", e);
+        }
 
         stats = {
           users: {
@@ -75,23 +95,31 @@ serve(async (req: Request) => {
             premium: premiumUsers,
             recentWeek: recentUsers,
           },
-          files: {
-            total: totalFiles,
-            totalStorageBytes: totalStorageUsed,
+          storage: {
+            usedBytes: storageUsedBytes,
+            totalBytes: 536870912,
+            collections: totalCollections,
           },
         };
       } else {
         // PostgreSQL
         const sql = db.postgres!;
 
-        const [usersResult, filesResult, bannedResult, premiumResult, recentResult, storageResult] = await Promise.all([
+        const [usersResult, bannedResult, premiumResult, recentResult] = await Promise.all([
           sql`SELECT COUNT(*)::int as count FROM users`,
-          sql`SELECT COUNT(*)::int as count FROM files`,
           sql`SELECT COUNT(*)::int as count FROM users WHERE banned = true`,
           sql`SELECT COUNT(*)::int as count FROM users WHERE is_premium = true`,
           sql`SELECT COUNT(*)::int as count FROM users WHERE joined_date >= NOW() - INTERVAL '7 days'`,
-          sql`SELECT COALESCE(SUM(file_size), 0)::bigint as total FROM files`,
         ]);
+
+        // Get database size
+        let dbSize = 0;
+        try {
+          const sizeResult = await sql`SELECT pg_database_size(current_database())::bigint as size`;
+          dbSize = Number(sizeResult[0]?.size || 0);
+        } catch (e) {
+          console.log("Could not get database size:", e);
+        }
 
         stats = {
           users: {
@@ -100,9 +128,10 @@ serve(async (req: Request) => {
             premium: premiumResult[0]?.count || 0,
             recentWeek: recentResult[0]?.count || 0,
           },
-          files: {
-            total: filesResult[0]?.count || 0,
-            totalStorageBytes: Number(storageResult[0]?.total || 0),
+          storage: {
+            usedBytes: dbSize,
+            totalBytes: 536870912,
+            collections: 0,
           },
         };
       }
