@@ -14,6 +14,47 @@ export type Database = {
   }
   public: {
     Tables: {
+      activity_log: {
+        Row: {
+          action: string
+          created_at: string
+          description: string | null
+          id: string
+          link_id: string | null
+          metadata: Json | null
+          user_id: string | null
+          user_name: string | null
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          link_id?: string | null
+          metadata?: Json | null
+          user_id?: string | null
+          user_name?: string | null
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          link_id?: string | null
+          metadata?: Json | null
+          user_id?: string | null
+          user_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "activity_log_link_id_fkey"
+            columns: ["link_id"]
+            isOneToOne: false
+            referencedRelation: "bot_links"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       bot_env_vars: {
         Row: {
           created_at: string
@@ -44,6 +85,68 @@ export type Database = {
         }
         Relationships: []
       }
+      bot_links: {
+        Row: {
+          bot_link: string
+          category_id: string | null
+          click_count: number
+          created_at: string
+          created_by: string | null
+          created_by_name: string | null
+          first_msg_id: number | null
+          id: string
+          is_active: boolean
+          last_msg_id: number | null
+          link_type: string
+          name: string
+          notes: string | null
+          shared_with: string[] | null
+          updated_at: string
+        }
+        Insert: {
+          bot_link: string
+          category_id?: string | null
+          click_count?: number
+          created_at?: string
+          created_by?: string | null
+          created_by_name?: string | null
+          first_msg_id?: number | null
+          id?: string
+          is_active?: boolean
+          last_msg_id?: number | null
+          link_type?: string
+          name: string
+          notes?: string | null
+          shared_with?: string[] | null
+          updated_at?: string
+        }
+        Update: {
+          bot_link?: string
+          category_id?: string | null
+          click_count?: number
+          created_at?: string
+          created_by?: string | null
+          created_by_name?: string | null
+          first_msg_id?: number | null
+          id?: string
+          is_active?: boolean
+          last_msg_id?: number | null
+          link_type?: string
+          name?: string
+          notes?: string | null
+          shared_with?: string[] | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bot_links_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "link_categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       bot_settings: {
         Row: {
           id: string
@@ -65,6 +168,30 @@ export type Database = {
           setting_value?: Json | null
           updated_at?: string
           updated_by?: string | null
+        }
+        Relationships: []
+      }
+      link_categories: {
+        Row: {
+          color: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          name: string
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name: string
+        }
+        Update: {
+          color?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name?: string
         }
         Relationships: []
       }

@@ -8,9 +8,10 @@ interface BotStats {
     premium: number;
     recentWeek: number;
   };
-  files: {
-    total: number;
-    totalStorageBytes: number;
+  storage?: {
+    usedBytes: number;
+    totalBytes: number;
+    collections: number;
   };
 }
 

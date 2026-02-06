@@ -2,7 +2,7 @@ import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
-  Files,
+  Link2,
   Users,
   Settings,
   Bot,
@@ -25,7 +25,7 @@ import { Badge } from "@/components/ui/badge";
 
 const navItems = [
   { title: "Overview", url: "/", icon: LayoutDashboard },
-  { title: "Files", url: "/files", icon: Files },
+  { title: "Links", url: "/links", icon: Link2 },
   { title: "Users", url: "/users", icon: Users, ownerOnly: true },
   { title: "Bot Settings", url: "/bot-settings", icon: Sliders },
   { title: "Bot Admins", url: "/bot-admins", icon: UserCog, ownerOnly: true },
