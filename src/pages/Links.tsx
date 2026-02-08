@@ -37,6 +37,7 @@ import {
   useCreateLink, useDeleteLink, useToggleLinkActive,
 } from "@/hooks/useLinks";
 import { formatDate } from "@/hooks/useBotData";
+import { CategoryManager } from "@/components/links/CategoryManager";
 
 const linkTypeLabels: Record<string, string> = {
   single: "Single",
@@ -101,10 +102,12 @@ const Links = () => {
             <h1 className="text-3xl font-bold tracking-tight">Bot Links</h1>
             <p className="text-muted-foreground mt-1">Manage all generated links for your bot</p>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button><Plus className="h-4 w-4 mr-2" />Add Link</Button>
-            </DialogTrigger>
+          <div className="flex items-center gap-2">
+            <CategoryManager />
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button><Plus className="h-4 w-4 mr-2" />Add Link</Button>
+              </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>Add New Link</DialogTitle>
@@ -164,6 +167,7 @@ const Links = () => {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          </div>
         </div>
 
         {/* Stats */}

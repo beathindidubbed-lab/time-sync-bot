@@ -68,6 +68,52 @@ export function useCreateCategory() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["link-categories"] });
+      queryClient.invalidateQueries({ queryKey: ["link-stats"] });
+    },
+  });
+}
+
+export function useUpdateCategory() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, name, color }: { id: string; name: string; color: string }) => {
+      const { data, error } = await (supabase as any)
+        .from("link_categories")
+        .update({ name, color })
+        .eq("id", id)
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["link-categories"] });
+      queryClient.invalidateQueries({ queryKey: ["bot-links"] });
+      queryClient.invalidateQueries({ queryKey: ["link-stats"] });
+    },
+  });
+}
+
+export function useDeleteCategory() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      // Unlink all links from this category first
+      await (supabase as any)
+        .from("bot_links")
+        .update({ category_id: null })
+        .eq("category_id", id);
+
+      const { error } = await (supabase as any)
+        .from("link_categories")
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["link-categories"] });
+      queryClient.invalidateQueries({ queryKey: ["bot-links"] });
+      queryClient.invalidateQueries({ queryKey: ["link-stats"] });
     },
   });
 }
